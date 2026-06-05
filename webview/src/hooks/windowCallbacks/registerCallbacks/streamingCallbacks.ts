@@ -430,38 +430,52 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
           __turnId: endedStreamingTurnId, // Keep __turnId for merge guard
           ...(durationMs != null ? { durationMs } : {}),
         };
+      }
 
-        // FIX: Merge tool_result user messages that were in the pending snapshot
-        // but would otherwise be lost when the rAF is cancelled.  Without this,
-        // tool cards remain stuck in "pending" spinner state.
-        if (pendingToolResultMsgs.length > 0) {
-          // Build a set of existing tool_use_ids from the current message list
-          // to avoid adding duplicate tool_result messages.
-          const existingToolResultIds = new Set<string>();
-          for (const m of newMessages) {
-            const raw = m?.raw as Record<string, unknown> | undefined;
-            if (!raw || typeof raw !== 'object') continue;
-            const msg = raw.message as Record<string, unknown> | undefined;
-            const content = (raw.content ?? msg?.content) as Array<Record<string, unknown>> | undefined;
-            if (!Array.isArray(content)) continue;
-            for (const block of content) {
-              if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
-                existingToolResultIds.add(block.tool_use_id);
-              }
+      // FIX: Merge tool_result user messages that were in the pending snapshot
+      // but would otherwise be lost when the rAF is cancelled.  Without this,
+      // tool cards remain stuck in "pending" spinner state.
+      //
+      // Runs INDEPENDENTLY of the assistant-patch branch above: a completed
+      // tool_result can land in the pending snapshot even when there is no active
+      // streaming assistant message to finalize (endedStreamingMessageIndex < 0,
+      // e.g. backend-streaming-render paths or a message list mutated between the
+      // last delta and stream end).  Coupling it to the assistant branch would
+      // silently drop those completed results in exactly the stuck-spinner case
+      // this fix targets.
+      if (pendingToolResultMsgs.length > 0) {
+        // Preserve immutability: lazily clone prev once before the first push so
+        // the updater never mutates the previous state array in place (the
+        // assistant branch above may have left newMessages === prev).
+        if (newMessages === prev) {
+          newMessages = [...prev];
+        }
+        // Build a set of existing tool_use_ids from the current message list
+        // to avoid adding duplicate tool_result messages.
+        const existingToolResultIds = new Set<string>();
+        for (const m of newMessages) {
+          const raw = m?.raw as Record<string, unknown> | undefined;
+          if (!raw || typeof raw !== 'object') continue;
+          const msg = raw.message as Record<string, unknown> | undefined;
+          const content = (raw.content ?? msg?.content) as Array<Record<string, unknown>> | undefined;
+          if (!Array.isArray(content)) continue;
+          for (const block of content) {
+            if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+              existingToolResultIds.add(block.tool_use_id);
             }
           }
-          // Append only tool_result messages that aren't already present
-          for (const trMsg of pendingToolResultMsgs) {
-            const raw = trMsg.raw;
-            const msg = raw.message as Record<string, unknown> | undefined;
-            const content = (raw.content ?? msg?.content) as Array<Record<string, unknown>> | undefined;
-            if (!Array.isArray(content)) continue;
-            const hasNewToolResult = content.some(
-              (block) => block?.type === 'tool_result' && typeof block.tool_use_id === 'string' && !existingToolResultIds.has(block.tool_use_id),
-            );
-            if (hasNewToolResult) {
-              newMessages.push({ ...trMsg, type: 'user' as const, timestamp: String(Date.now()) });
-            }
+        }
+        // Append only tool_result messages that aren't already present
+        for (const trMsg of pendingToolResultMsgs) {
+          const raw = trMsg.raw;
+          const msg = raw.message as Record<string, unknown> | undefined;
+          const content = (raw.content ?? msg?.content) as Array<Record<string, unknown>> | undefined;
+          if (!Array.isArray(content)) continue;
+          const hasNewToolResult = content.some(
+            (block) => block?.type === 'tool_result' && typeof block.tool_use_id === 'string' && !existingToolResultIds.has(block.tool_use_id),
+          );
+          if (hasNewToolResult) {
+            newMessages.push({ ...trMsg, type: 'user' as const, timestamp: new Date().toISOString() });
           }
         }
       }
