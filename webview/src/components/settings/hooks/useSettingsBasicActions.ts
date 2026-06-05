@@ -41,6 +41,8 @@ export interface UseSettingsBasicActionsReturn {
   nodeVersion: string | null;
   minNodeVersion: number;
   savingNodePath: boolean;
+  claudeCliPath: string;
+  savingClaudeCliPath: boolean;
   workingDirectory: string;
   savingWorkingDirectory: boolean;
   editorFontConfig:
@@ -85,6 +87,7 @@ export interface UseSettingsBasicActionsReturn {
   // Handler functions (public API for components)
   // =========================================================================
   handleSaveNodePath: () => void;
+  handleSaveClaudeCliPath: () => void;
   handleSaveWorkingDirectory: () => void;
   handleUiFontSelectionChange: (selection: string) => void;
   handleSaveUiFontCustomPath: (path: string) => void;
@@ -126,6 +129,8 @@ export interface UseSettingsBasicActionsReturn {
   /** @internal */ setNodeVersion: (version: string | null) => void;
   /** @internal */ setMinNodeVersion: (version: number) => void;
   /** @internal */ setSavingNodePath: (saving: boolean) => void;
+  /** @internal */ setClaudeCliPath: (path: string) => void;
+  /** @internal */ setSavingClaudeCliPath: (saving: boolean) => void;
   /** @internal */ setWorkingDirectory: (dir: string) => void;
   /** @internal */ setSavingWorkingDirectory: (saving: boolean) => void;
   /** @internal */ setEditorFontConfig: (
@@ -177,6 +182,10 @@ export function useSettingsBasicActions({
   const [nodeVersion, setNodeVersion] = useState<string | null>(null);
   const [minNodeVersion, setMinNodeVersion] = useState(18);
   const [savingNodePath, setSavingNodePath] = useState(false);
+
+  // Custom Claude CLI path (overrides bundled SDK when set)
+  const [claudeCliPath, setClaudeCliPath] = useState('');
+  const [savingClaudeCliPath, setSavingClaudeCliPath] = useState(false);
 
   // Working directory configuration
   const [workingDirectory, setWorkingDirectory] = useState('');
@@ -298,6 +307,12 @@ export function useSettingsBasicActions({
     const payload = { path: (nodePath || '').trim() };
     sendToJava(`set_node_path:${JSON.stringify(payload)}`);
   }, [nodePath]);
+
+  const handleSaveClaudeCliPath = useCallback(() => {
+    setSavingClaudeCliPath(true);
+    const payload = { path: (claudeCliPath || '').trim() };
+    sendToJava(`set_claude_cli_path:${JSON.stringify(payload)}`);
+  }, [claudeCliPath]);
 
   const handleSaveWorkingDirectory = useCallback(() => {
     setSavingWorkingDirectory(true);
@@ -601,6 +616,10 @@ export function useSettingsBasicActions({
     setMinNodeVersion,
     savingNodePath,
     setSavingNodePath,
+    claudeCliPath,
+    setClaudeCliPath,
+    savingClaudeCliPath,
+    setSavingClaudeCliPath,
     workingDirectory,
     setWorkingDirectory,
     savingWorkingDirectory,
@@ -641,6 +660,7 @@ export function useSettingsBasicActions({
     skipNewSessionConfirm,
     setSkipNewSessionConfirm,
     handleSaveNodePath,
+    handleSaveClaudeCliPath,
     handleSaveWorkingDirectory,
     handleUiFontSelectionChange,
     handleSaveUiFontCustomPath,

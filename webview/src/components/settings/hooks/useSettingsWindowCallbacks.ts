@@ -28,6 +28,8 @@ export interface SettingsWindowCallbacksDeps {
   setNodeVersion: (version: string | null) => void;
   setMinNodeVersion: (version: number) => void;
   setSavingNodePath: (saving: boolean) => void;
+  setClaudeCliPath: (path: string) => void;
+  setSavingClaudeCliPath: (saving: boolean) => void;
   setWorkingDirectory: (dir: string) => void;
   setSavingWorkingDirectory: (saving: boolean) => void;
   setCommitPrompt: (prompt: string) => void;
@@ -131,6 +133,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       d().showAlert('error', t('toast.operationFailed'), message);
       d().setLoading(false);
       d().setSavingNodePath(false);
+      d().setSavingClaudeCliPath(false);
       d().setSavingWorkingDirectory(false);
       d().setSavingCommitPrompt(false);
       d().setSavingProjectCommitPrompt(false);
@@ -156,6 +159,17 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.dispatchEvent(new CustomEvent('nodePathReady'));
     };
 
+    window.updateClaudeCliPath = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setClaudeCliPath(data.path || '');
+      } catch (e) {
+        console.warn('[SettingsView] Failed to parse updateClaudeCliPath JSON, fallback to legacy format:', e);
+        d().setClaudeCliPath(jsonStr || '');
+      }
+      d().setSavingClaudeCliPath(false);
+    };
+
     window.updateWorkingDirectory = (jsonStr: string) => {
       try {
         const data = JSON.parse(jsonStr);
@@ -170,6 +184,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     window.showSuccess = (message: string) => {
       d().showAlert('success', t('toast.operationSuccess'), message);
       d().setSavingNodePath(false);
+      d().setSavingClaudeCliPath(false);
       d().setSavingWorkingDirectory(false);
     };
 
@@ -498,6 +513,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     // Note: loadPrompts is now handled by PromptSection component
     d().loadPrompts?.();
     sendToJava('get_node_path:');
+    sendToJava('get_claude_cli_path:');
     sendToJava('get_working_directory:');
     sendToJava('get_editor_font_config:');
     sendToJava('get_ui_font_config:');
@@ -525,6 +541,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.showError = undefined;
       window.showSwitchSuccess = undefined;
       window.updateNodePath = undefined;
+      window.updateClaudeCliPath = undefined;
       window.updateWorkingDirectory = undefined;
       window.showSuccess = undefined;
       window.showSuccessI18n = undefined;
