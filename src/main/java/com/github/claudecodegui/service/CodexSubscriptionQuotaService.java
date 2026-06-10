@@ -321,6 +321,19 @@ public final class CodexSubscriptionQuotaService {
         }
     }
 
+    /**
+     * Drop all cached quota snapshots so the next {@link #getQuotaSnapshot()} refetches.
+     * Must be called when the active Codex account changes: a cli_login snapshot belongs
+     * to the previous OAuth account and would otherwise be served (up to ~60s) for the
+     * new one. Resetting the in-flight ref also stops the next request from awaiting the
+     * previous account's mid-flight refresh.
+     */
+    public void invalidateCache() {
+        sessionSnapshotCache.clear();
+        apiSnapshotCache.clear();
+        inFlightRefresh.set(null);
+    }
+
     public CompletableFuture<JsonObject> getQuotaSnapshot() {
         long now = now();
         // Checked before the cache fast path so a snapshot cached under cli_login

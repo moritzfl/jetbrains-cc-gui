@@ -339,6 +339,35 @@ public class CodexSubscriptionQuotaServiceTest {
     }
 
     @Test
+    public void invalidateCacheForcesRefetchAfterAccountSwitch() {
+        AtomicLong now = new AtomicLong(BASE_NOW);
+        AtomicInteger fetchCount = new AtomicInteger();
+        CodexSubscriptionQuotaService service = newService(
+                CodemossSettingsService.CODEX_RUNTIME_ACCESS_CLI_LOGIN,
+                authWithToken(),
+                token -> {
+                    fetchCount.incrementAndGet();
+                    return usageWithPrimaryUsedPercent(44);
+                },
+                newSessionsDir(),
+                now
+        );
+
+        service.getQuotaSnapshot().join();
+        // Within the API window a second read is served from cache: no refetch.
+        service.getQuotaSnapshot().join();
+        assertEquals(1, fetchCount.get());
+
+        // Switching Codex accounts must drop the previous account's snapshot so the next
+        // read refetches even though the cache window has not elapsed.
+        service.invalidateCache();
+        JsonObject afterSwitch = service.getQuotaSnapshot().join();
+
+        assertEquals(2, fetchCount.get());
+        assertEquals("wham_usage", afterSwitch.get("source").getAsString());
+    }
+
+    @Test
     public void rescansSessionAfterFiveSecondsAndStopsUsingApi() {
         AtomicLong now = new AtomicLong(BASE_NOW);
         AtomicInteger fetchCount = new AtomicInteger();
