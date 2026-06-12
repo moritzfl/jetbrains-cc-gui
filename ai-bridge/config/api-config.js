@@ -200,21 +200,30 @@ export function configureCliIdentity() {
 // ============================================================================
 
 /**
- * Network-related environment variable names that should be injected from
- * settings.json into process.env early at startup.
+ * Environment variable names that should be injected from settings.json into
+ * process.env early at startup.
  *
- * IDEs launched via desktop launcher don't inherit shell proxy configuration,
- * so we need to explicitly read and set them from settings.json.
+ * IDEs launched from a desktop launcher (macOS Dock, Windows Start Menu,
+ * Linux app launcher) do NOT inherit the user's shell environment. Variables
+ * configured in settings.json therefore never reach process.env, causing
+ * cloud provider auth (Bedrock, Vertex, Foundry) and proxy/TLS settings to
+ * silently fail. Reading them here ensures every subprocess the daemon spawns
+ * (the claude binary, MCP servers, Bash tool, etc.) sees the correct env.
  *
  * For corporate SSL-inspection proxies, prefer NODE_EXTRA_CA_CERTS (path to
  * a PEM bundle) over NODE_TLS_REJECT_UNAUTHORIZED=0 — the former adds custom
  * CAs while keeping verification intact; the latter disables ALL verification.
  */
 const NETWORK_ENV_VARS = [
+  // Proxy and TLS
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
   'http_proxy', 'https_proxy', 'no_proxy',
   'NODE_EXTRA_CA_CERTS',
   'NODE_TLS_REJECT_UNAUTHORIZED',
+  // AWS credentials — required for Bedrock auth when the IDE is desktop-launched
+  'AWS_PROFILE', 'AWS_DEFAULT_PROFILE',
+  'AWS_REGION', 'AWS_DEFAULT_REGION',
+  'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
 ];
 
 const LOCAL_SETTINGS_PROVIDER_ID = '__local_settings_json__';
