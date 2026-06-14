@@ -662,7 +662,14 @@ public class ClaudeChatWindow {
                     // record with MessageParser.parseServerMessage(), and pushes a full
                     // refresh through the callback facade. Coalesced so overlapping
                     // background-task completions never reload concurrently.
-                    requestSessionReload();
+                    //
+                    // Pass updatedSessionId as the reload target: the session field can
+                    // be reassigned on the EDT (new-session / restart flows) between the
+                    // currentSessionId check above and the reload actually running.
+                    // driveSessionReload() re-validates the id at entry and after
+                    // loadFromServer() returns, so a reload never lands on a session
+                    // that the user has navigated away from.
+                    requestSessionReload(updatedSessionId);
                 }
             };
             this.claudeSDKBridge.addDaemonEventListener(this.titleEventListener);
@@ -679,8 +686,13 @@ public class ClaudeChatWindow {
      * reload runs on a background thread. At most one reload is in flight;
      * requests arriving during a reload collapse into a single follow-up reload
      * that reflects the latest JSONL.
+     *
+     * @param targetSessionId the session id this reload is bound to. Carried
+     *     through the whole coalesced chain and re-validated at every step so a
+     *     reload never runs against a session the user has navigated away from
+     *     (the session field is reassigned on the EDT by new-session / restart).
      */
-    private void requestSessionReload() {
+    private void requestSessionReload(String targetSessionId) {
         synchronized (sessionReloadLock) {
             if (sessionReloadInFlight) {
                 sessionReloadPending = true;
@@ -688,36 +700,99 @@ public class ClaudeChatWindow {
             }
             sessionReloadInFlight = true;
         }
-        driveSessionReload();
+        driveSessionReload(targetSessionId);
     }
 
-    private void driveSessionReload() {
-        ClaudeSession current = session;
-        if (disposed || current == null) {
+    private void driveSessionReload(String targetSessionId) {
+        // Re-validate at entry: the session may have been replaced on the EDT
+        // between the listener's sessionId check and this call.
+        if (disposed || !isSessionActive(targetSessionId)) {
             synchronized (sessionReloadLock) {
                 sessionReloadInFlight = false;
                 sessionReloadPending = false;
             }
             return;
         }
+        // A narrow window remains: the EDT can reassign `session` between the
+        // isSessionActive() check above and the `current = session` read below,
+        // so `current` may be a session the user has navigated away from. This is
+        // safe by design: loadFromServer() pushes its result through `current`'s
+        // own callbackFacade → SessionCallbackAdapter, and that adapter is
+        // deactivated by setupSessionCallbacks() when the new session is bound
+        // (volatile `active` flag, checked in every on* callback). So a stale
+        // reload's onMessageUpdate/onStateChange are silently dropped, and the
+        // isSessionActive() check in the continuation additionally blocks any
+        // follow-up reload. Two independent guards; neither alone is sufficient.
+        ClaudeSession current = session;
         current.loadFromServer().whenComplete((v, ex) -> {
             if (ex != null) {
                 LOG.warn("[ClaudeChatWindow] session reload failed", ex);
             }
             boolean runAgain;
             synchronized (sessionReloadLock) {
-                if (sessionReloadPending && !disposed) {
-                    sessionReloadPending = false;
-                    runAgain = true;
-                } else {
+                runAgain = decideReloadCompletion(
+                        sessionReloadPending, disposed, isSessionActive(targetSessionId));
+                // Always clear sessionReloadPending: on the runAgain path the
+                // pending request is consumed; on the finish path any stale flag
+                // (possibly bound to a session the user navigated away from) must
+                // be dropped so the next same-session reload does not inherit it.
+                sessionReloadPending = false;
+                if (!runAgain) {
                     sessionReloadInFlight = false;
-                    runAgain = false;
                 }
             }
             if (runAgain) {
-                driveSessionReload();
+                driveSessionReload(targetSessionId);
             }
         });
+    }
+
+    /**
+     * Pure decision function for what to do when an in-flight
+     * {@code loadFromServer()} reload completes. Extracted so the coalescing
+     * state machine is unit-testable without constructing a full
+     * ClaudeChatWindow (which needs a Project, JBCefBrowser, etc.).
+     *
+     * <p>Returns {@code true} (run another reload) only when ALL of:
+     * <ul>
+     *   <li>a follow-up is pending ({@code sessionReloadPending}), AND</li>
+     *   <li>the window is still alive ({@code !disposed}), AND</li>
+     *   <li>the session the reload was started for is still active
+     *       ({@code sessionMatches}). If the user navigated to a different
+     *       session, the pending flag belongs to the old session and must not
+     *       trigger a reload against the new one — the new session drives its
+     *       own lifecycle.</li>
+     * </ul>
+     *
+     * <p>Either way the caller clears {@code sessionReloadPending}; this
+     * function only decides whether to re-run.
+     *
+     * @param pending        current value of {@code sessionReloadPending}
+     * @param disposed       whether the window has been disposed
+     * @param sessionMatches whether {@code session} still identifies the
+     *                       session this reload was bound to
+     * @return {@code true} to collapse the pending request into another reload;
+     *         {@code false} to finish (the in-flight flag is cleared by the
+     *         caller)
+     */
+    static boolean decideReloadCompletion(
+            boolean pending, boolean disposed, boolean sessionMatches) {
+        return pending && !disposed && sessionMatches;
+    }
+
+    /**
+     * Returns true iff the window currently holds the session identified by
+     * {@code sessionId} (i.e. it has not been replaced by a new-session /
+     * restart flow on the EDT). The session field is volatile, so this read is
+     * safe from the daemon-reader and loadFromServer() continuation threads.
+     */
+    private boolean isSessionActive(String sessionId) {
+        ClaudeSession current = session;
+        if (current == null || sessionId == null) {
+            return false;
+        }
+        String currentId = current.getSessionId();
+        return sessionId.equals(currentId);
     }
 
     private void onStreamEnded() {
