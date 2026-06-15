@@ -183,6 +183,72 @@ test('Integration: non-result inter-turn messages do not emit events', async () 
 // Abort / Stream Completion / Errors
 // ============================================================================
 
+test('Regression (#1305): result routes by turnSink state, not by message ordering', async () => {
+  // Locks the dual-mode routing invariant the turn-boundary analysis relies on:
+  // a 'result' is delivered to the active turnSink while a turn is in progress
+  // (so executeTurn can observe it and break), and only emits a session_updated
+  // event once the turn is over (turnSink cleared). In production the clear is
+  // synchronous in executeTurn's finally block, so the reader can never push a
+  // post-turn result to a dying sink; this test pins that routing contract.
+  const ctl = createControlledQuery();
+  const runtime = { closed: false, sessionId: 'sess-route', turnSink: createTurnSink(), query: ctl.query, inputStream: { done() {} } };
+  const events = captureInterTurnEvents();
+
+  const reader = startPerpetualReader(runtime);
+  try {
+    // In-turn result → goes to the sink, NOT emitted as an event.
+    ctl.deliver({ type: 'result', is_error: false });
+    const inTurn = await runtime.turnSink.take();
+    assert.equal(inTurn.value.type, 'result');
+
+    // Simulate executeTurn's synchronous finally: break → turnSink = null.
+    runtime.turnSink = null;
+
+    // Inter-turn result → emitted as an event, NOT pushed anywhere.
+    ctl.deliver({ type: 'result', is_error: false });
+    await settle();
+  } finally {
+    runtime.closed = true;
+    ctl.end();
+    await reader;
+    events.restore();
+  }
+
+  const updates = events.list.filter((e) => e.event === 'session_updated');
+  assert.equal(updates.length, 1, 'only the post-turn result should emit an event');
+  assert.equal(updates[0].sessionId, 'sess-route');
+});
+
+test('Regression (#1305): result during inter-turn does not touch a cleared turnSink', async () => {
+  // Guards against a future refactor that reintroduces an await between the
+  // turnSink-null check and the push: if turnSink is null when a result
+  // arrives, it must be routed through emitInterTurnEvent and never throw or
+  // silently drop. Asserts no event is emitted for the in-turn result even
+  // when the sink is cleared before the reader observes it.
+  const ctl = createControlledQuery();
+  // inputStream included for parity with other runtimes in the file; the
+  // current path never reaches disposeRuntime (runtime.closed is set before
+  // ctl.end()), but future reader changes could touch it on a non-closed path.
+  const runtime = { closed: false, sessionId: 'sess-clear', turnSink: null, query: ctl.query, inputStream: { done() {} } };
+  const events = captureInterTurnEvents();
+
+  const reader = startPerpetualReader(runtime);
+  try {
+    ctl.deliver({ type: 'result', is_error: false });
+    ctl.deliver({ type: 'result', is_error: false });
+    await settle();
+  } finally {
+    runtime.closed = true;
+    ctl.end();
+    await reader;
+    events.restore();
+  }
+
+  const updates = events.list.filter((e) => e.event === 'session_updated');
+  assert.equal(updates.length, 2, 'each inter-turn result emits its own event');
+  updates.forEach((u) => assert.equal(u.sessionId, 'sess-clear'));
+});
+
 test('Integration: query.next() error is forwarded to the active turnSink', async () => {
   const ctl = createControlledQuery();
   const runtime = { closed: false, sessionId: 'sess-1', turnSink: createTurnSink(), query: ctl.query, inputStream: { done() {} } };
