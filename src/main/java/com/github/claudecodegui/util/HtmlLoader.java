@@ -96,6 +96,55 @@ public class HtmlLoader {
     }
 
     /**
+     * Inject per-tab provider/model into the HTML so the WebView can prefer
+     * the backend-restored values over the global localStorage snapshot.
+     *
+     * Without this, every tab in a multi-tab setup hydrates from the same
+     * localStorage key ("model-selection-state") and clobbers the per-tab
+     * provider that ClaudeChatWindow.restorePersistedTabSessionState already
+     * applied to the session — see issue #1353.
+     *
+     * Both arguments may be null/empty. Empty strings are still injected as
+     * empty so the frontend can distinguish "explicitly cleared by backend"
+     * (use empty string, fall back to localStorage) from "backend never said
+     * anything" (variable absent, use localStorage). The frontend treats
+     * empty strings as "no preference"; only non-empty values override
+     * localStorage.
+     */
+    public String injectInitialTabState(String html, String provider, String model) {
+        try {
+            String safeProvider = escapeForSingleQuotedJs(provider == null ? "" : provider);
+            String safeModel = escapeForSingleQuotedJs(model == null ? "" : model);
+            String scriptInjection = "\n    <script>"
+                    + "window.__INITIAL_TAB_PROVIDER__ = '" + safeProvider + "';"
+                    + "window.__INITIAL_TAB_MODEL__ = '" + safeModel + "';"
+                    + "</script>";
+            int headIndex = html.indexOf("<head>");
+            if (headIndex != -1) {
+                int insertPos = headIndex + "<head>".length();
+                return html.substring(0, insertPos) + scriptInjection + html.substring(insertPos);
+            }
+        } catch (Exception e) {
+            LOG.error("Failed to inject initial tab state: " + e.getMessage(), e);
+        }
+        return html;
+    }
+
+    private static String escapeForSingleQuotedJs(String value) {
+        // Restricted set — provider/model IDs only contain safe chars in
+        // practice, but a malicious settings.json provider list could carry
+        // arbitrary text. Reject the small set that can break out of the
+        // single-quoted literal.
+        return value
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("<", "\\u003c")
+                .replace(">", "\\u003e");
+    }
+
+    /**
      * Generate fallback HTML.
      */
     public String generateFallbackHtml() {
